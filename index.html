@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<style>
+body{
+  margin:0;
+  background:#121212;
+  color:white;
+  font-family:sans-serif;
+  display:flex;
+  justify-content:center;
+}
+
+.player{
+  width:100%;
+  max-width:520px;
+  padding:12px;
+  text-align:center;
+  padding-bottom:180px;
+}
+
+button{
+  padding:8px 12px;
+  margin:4px;
+  border:none;
+  border-radius:10px;
+  background:#333;
+  color:white;
+  cursor:pointer;
+}
+
+button.active{
+  background:#1db954;
+  color:black;
+}
+
+/* 曲リスト */
+.song{
+  display:flex;
+  justify-content:space-between;
+  padding:12px 10px;
+  border-bottom:1px solid #222;
+  cursor:pointer;
+  border-radius:8px;
+}
+
+.song:hover{
+  background:#222;
+}
+
+.song.active{
+  transform:scale(1.03);
+  font-weight:bold;
+  border-left:4px solid #1db954;
+  background:rgba(255,255,255,0.06);
+}
+
+/* ジャケット */
+#coverWrap{
+  display:flex;
+  justify-content:center;
+  align-items:center;
+  margin-top:10px;
+  min-height:200px;
+}
+
+#nowCover{
+  width:180px;
+  height:180px;
+  border-radius:10px;
+  object-fit:cover;
+  background:#222;
+}
+
+/* UI */
+#search{
+  width:100%;
+  padding:8px;
+  border:none;
+  border-radius:8px;
+  margin-top:6px;
+}
+
+#progress,#miniProgress{
+  width:100%;
+}
+
+#time,#miniTime{
+  font-size:13px;
+  opacity:0.8;
+  margin-top:5px;
+}
+
+canvas{
+  margin-top:10px;
+  background:#0d0d0d;
+  border-radius:10px;
+}
+
+#miniPlayer{
+  position:fixed;
+  bottom:0;
+  left:0;
+  right:0;
+  background:#181818;
+  border-top:1px solid #333;
+  padding:10px;
+  box-sizing:border-box;
+  max-width:520px;
+  margin:0 auto;
+}
+</style>
+</head>
+
+<body>
+
+<div class="player">
+
+<h2 id="nowTitle">未再生</h2>
+
+<div id="coverWrap">
+  <img id="nowCover">
+</div>
+
+<input type="text" id="search" placeholder="検索">
+
+<br>
+
+<button onclick="toggleShuffle()">🔀</button>
+<button onclick="toggleLoop()">🔁</button>
+<button onclick="togglePlay()">⏯</button>
+
+<br>
+
+<button onclick="prevMusic()">⏮</button>
+<button onclick="nextMusic()">⏭</button>
+
+<input type="range" id="progress" min="0" max="100" value="0">
+
+<div id="time">0:00 / 0:00</div>
+
+🔊 <input type="range" id="volume" min="0" max="1" step="0.01" value="1">
+
+<canvas id="wave" width="500" height="120"></canvas>
+
+<div id="list"></div>
+
+</div>
+
+<div id="miniPlayer">
+  <div id="miniTitle">停止中</div>
+  <button onclick="prevMusic()">⏮</button>
+  <button onclick="togglePlay()">⏯</button>
+  <button onclick="nextMusic()">⏭</button>
+  <input type="range" id="miniProgress" min="0" max="100" value="0">
+  <div id="miniTime">0:00 / 0:00</div>
+</div>
+
+<script>
+
+let playlist=[let playlist = [
+{name:"Worlds Smallest Violin", url:"Worlds Smallest Violin.mp3"},
+{name:"ただ声一つ A", url:"ただ声一つ A.mp3"},
+{name:"ただ声一つ", url:"ただ声一つ.mp3"},
+{name:"アゲハ蝶 offvocal", url:"アゲハ蝶 offvocal.mp3"},
+{name:"アゲハ蝶", url:"アゲハ蝶.mp3"},
+{name:"命に嫌われている", url:"命に嫌われている.mp3"},
+{name:"四季刻歌", url:"四季刻歌.mp3"},
+{name:"回る空うさぎ", url:"回る空うさぎ.mp3"},
+{name:"好きだから。", url:"好きだから。.mp3"},
+{name:"嫌々", url:"嫌々.mp3"},
+{name:"怪物 offvocal", url:"怪物 offvocal.mp3"},
+{name:"打ち上げ花火", url:"打ち上げ花火.mp3"},
+{name:"春泥棒", url:"春泥棒.mp3"},
+{name:"灯台", url:"灯台.mp3"},
+{name:"花に亡霊", url:"花に亡霊.mp3"},
+{name:"誰かの心臓になれたなら", url:"誰かの心臓になれたなら.mp3"}
+];
+
+let displayList = playlist;
+;
+let displayList=[];
+let audio=new Audio();
+let currentSong=null;
+
+let shuffle=false;
+let loopMode=false;
+
+// 🎯 DOM取得（超重要）
+const time=document.getElementById("time");
+const progress=document.getElementById("progress");
+const miniTime=document.getElementById("miniTime");
+const miniProgress=document.getElementById("miniProgress");
+
+// ---------------- AudioContext ----------------
+const ctx=new (window.AudioContext||window.webkitAudioContext)();
+const analyser=ctx.createAnalyser();
+const source=ctx.createMediaElementSource(audio);
+
+source.connect(analyser);
+analyser.connect(ctx.destination);
+
+analyser.fftSize=128;
+
+let data=new Uint8Array(analyser.frequencyBinCount);
+let smooth=new Array(analyser.frequencyBinCount).fill(0);
+
+// ---------------- 読み込み ----------------
+document.getElementById("folder").addEventListener("change",e=>{
+
+  let files=[...e.target.files];
+  let map={};
+
+  for(let f of files){
+    let base=f.name.replace(/\.(mp3|png)$/i,"");
+
+    if(!map[base]) map[base]={name:base};
+
+    if(f.name.toLowerCase().endsWith(".mp3")){
+      map[base].url=URL.createObjectURL(f);
+    }
+
+    if(f.name.toLowerCase().endsWith(".png")){
+      map[base].img=URL.createObjectURL(f);
+    }
+  }
+
+  playlist=Object.values(map);
+  displayList=playlist;
+
+  render();
+});
+
+// ---------------- ジャケット ----------------
+function updateCover(song){
+  const img=document.getElementById("nowCover");
+
+  if(song && song.img){
+    img.src=song.img;
+  }else{
+    img.removeAttribute("src");
+  }
+}
+
+// ---------------- リスト ----------------
+function render(){
+  const list=document.getElementById("list");
+  list.innerHTML="";
+
+  displayList.forEach(s=>{
+    const div=document.createElement("div");
+    div.className="song";
+
+    if(currentSong && currentSong.name===s.name){
+      div.classList.add("active");
+    }
+
+    div.innerHTML=`<span>${s.name}</span>`;
+    div.onclick=()=>playMusic(s);
+
+    list.appendChild(div);
+  });
+}
+
+// ---------------- 再生 ----------------
+function playMusic(song){
+  currentSong=song;
+
+  audio.src=song.url;
+  audio.play();
+
+  nowTitle.textContent=song.name;
+  miniTitle.textContent=song.name;
+
+  updateCover(song);
+
+  render();
+}
+
+// ---------------- 操作 ----------------
+function togglePlay(){
+  audio.paused ? audio.play() : audio.pause();
+}
+
+function toggleShuffle(){ shuffle=!shuffle; }
+function toggleLoop(){ loopMode=!loopMode; }
+
+// ---------------- 次曲（安全版） ----------------
+function nextMusic(){
+
+  if(!displayList.length) return;
+
+  let i = displayList.indexOf(currentSong);
+  if(i === -1) i = 0;
+
+  if(shuffle){
+    i = Math.floor(Math.random()*displayList.length);
+  }else{
+    i++;
+    if(i >= displayList.length){
+      if(loopMode) i = 0;
+      else return;
+    }
+  }
+
+  playMusic(displayList[i]);
+}
+
+// ---------------- 前曲 ----------------
+function prevMusic(){
+  let i = displayList.indexOf(currentSong);
+  if(i === -1) i = 0;
+
+  i = (i-1+displayList.length)%displayList.length;
+  playMusic(displayList[i]);
+}
+
+// ---------------- 検索 ----------------
+search.addEventListener("input",()=>{
+  let q=search.value.toLowerCase();
+  displayList=playlist.filter(s=>s.name.toLowerCase().includes(q));
+  render();
+});
+
+// ---------------- 音量 ----------------
+volume.oninput=()=>{
+  audio.volume=volume.value;
+};
+
+// ---------------- 時間（完全修正） ----------------
+audio.addEventListener("timeupdate",()=>{
+
+  let d = audio.duration || 0;
+  let p = d ? (audio.currentTime/d)*100 : 0;
+
+  progress.value = p;
+  miniProgress.value = p;
+
+  time.textContent =
+    fmt(audio.currentTime)+" / "+fmt(d);
+
+  miniTime.textContent =
+    fmt(audio.currentTime)+" / "+fmt(d);
+});
+
+function fmt(t){
+  if(!t || isNaN(t)) return "0:00";
+  let m=Math.floor(t/60);
+  let s=Math.floor(t%60);
+  return m+":"+(s<10?"0"+s:s);
+}
+
+progress.oninput=()=>{
+  if(audio.duration)
+    audio.currentTime=(progress.value/100)*audio.duration;
+};
+
+miniProgress.oninput=()=>{
+  if(audio.duration)
+    audio.currentTime=(miniProgress.value/100)*audio.duration;
+};
+
+// ---------------- 曲終了 → 次曲（確実版） ----------------
+audio.addEventListener("ended",()=>{
+  nextMusic();
+});
+
+// ---------------- 波形（グラデーション） ----------------
+const canvas=document.getElementById("wave");
+const c=canvas.getContext("2d");
+
+audio.addEventListener("play",()=>ctx.resume());
+
+function draw(){
+  requestAnimationFrame(draw);
+
+  analyser.getByteFrequencyData(data);
+
+  c.fillStyle="rgba(13,13,13,0.28)";
+  c.fillRect(0,0,500,120);
+
+  let bars=60;
+  let w=500/bars;
+  let center=60;
+
+  for(let i=0;i<data.length;i++){
+    smooth[i]+=(data[i]-smooth[i])*0.2;
+  }
+
+  for(let i=0;i<bars;i++){
+    let v=smooth[Math.floor(i*(data.length/bars))]/255;
+    let h=v*100;
+
+    let r,g,b;
+
+    if(v<0.25){
+      r=40; g=220; b=90;
+    }else if(v<0.5){
+      let t=(v-0.25)/0.25;
+      r=40+t*215; g=220; b=90-t*40;
+    }else if(v<0.75){
+      let t=(v-0.5)/0.25;
+      r=255; g=220-t*90; b=50;
+    }else{
+      let t=(v-0.75)/0.25;
+      r=255; g=130-t*80; b=50-t*30;
+    }
+
+    c.fillStyle=`rgb(${r},${g},${b})`;
+    c.fillRect(i*w,center-h/2,w-2,h);
+  }
+    render();
+shuffle = true;
+}
+
+draw();
+
+</script>
+
+</body>
+</html>
